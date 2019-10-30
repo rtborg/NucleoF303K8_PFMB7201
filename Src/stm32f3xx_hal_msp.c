@@ -106,7 +106,7 @@ void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
     /* ADC2 interrupt Init */
-    HAL_NVIC_SetPriority(ADC1_2_IRQn, 5, 5);
+    HAL_NVIC_SetPriority(ADC1_2_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(ADC1_2_IRQn);
   /* USER CODE BEGIN ADC2_MspInit 1 */
 
@@ -141,6 +141,73 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* hadc)
   /* USER CODE BEGIN ADC2_MspDeInit 1 */
 
   /* USER CODE END ADC2_MspDeInit 1 */
+  }
+
+}
+
+/**
+* @brief OPAMP MSP Initialization
+* This function configures the hardware resources used in this example
+* @param hopamp: OPAMP handle pointer
+* @retval None
+*/
+void HAL_OPAMP_MspInit(OPAMP_HandleTypeDef* hopamp)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if(hopamp->Instance==OPAMP2)
+  {
+  /* USER CODE BEGIN OPAMP2_MspInit 0 */
+
+  /* USER CODE END OPAMP2_MspInit 0 */
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    /**OPAMP2 GPIO Configuration
+    PA6     ------> OPAMP2_VOUT
+    PB0     ------> OPAMP2_VINP
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_6;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_0;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* USER CODE BEGIN OPAMP2_MspInit 1 */
+
+  /* USER CODE END OPAMP2_MspInit 1 */
+  }
+
+}
+
+/**
+* @brief OPAMP MSP De-Initialization
+* This function freeze the hardware resources used in this example
+* @param hopamp: OPAMP handle pointer
+* @retval None
+*/
+void HAL_OPAMP_MspDeInit(OPAMP_HandleTypeDef* hopamp)
+{
+  if(hopamp->Instance==OPAMP2)
+  {
+  /* USER CODE BEGIN OPAMP2_MspDeInit 0 */
+
+  /* USER CODE END OPAMP2_MspDeInit 0 */
+
+    /**OPAMP2 GPIO Configuration
+    PA6     ------> OPAMP2_VOUT
+    PB0     ------> OPAMP2_VINP
+    */
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_6);
+
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_0);
+
+  /* USER CODE BEGIN OPAMP2_MspDeInit 1 */
+
+  /* USER CODE END OPAMP2_MspDeInit 1 */
   }
 
 }
