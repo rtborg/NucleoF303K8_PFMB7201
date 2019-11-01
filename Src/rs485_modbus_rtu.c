@@ -83,7 +83,6 @@ void USART1_IRQHandler(void) {
 
 	if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE)) {											// Handle RX interrupt
 		huart1.Instance->RTOR |= 0x50;															// Test only: set RTOR again after each reception
-
 		modbus_rx_buffer[modbus_buffer_head++] = USART1->RDR;									// Place char in modbus command buffer (8 bytes only)
 		if (modbus_buffer_head == MODBUS_COMMAND_LENGTH) modbus_buffer_head = 0;				// Wrap-around buffer head
 		modbus_buffer_count++;																	// Increase modbus buffer count
