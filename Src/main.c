@@ -1,5 +1,6 @@
 #include "main.h"
 #include <string.h>
+#include <stdbool.h>
 #include "rs485_modbus_rtu.h"
 
 #define MEASURE	0x00010001
@@ -22,15 +23,17 @@ static void MX_OPAMP2_Init(void);
 uint32_t get_modbus_address();
 void process_modbus_command(ModbusCommand mc);
 
+
 /**
  * The function is defined as weak in stm32f3xx_hal.c and is redefined in main
  * in order to use the sys tick interrupt (ocurring each ms)
  */
 void HAL_IncTick(void);
 
-static uint8_t uart_buffer[64] = {0};
-static uint32_t device_modbus_address = 0;
-static volatile uint32_t adc_value = 0;
+static uint8_t uart_buffer[64] = {0};									// Buffer used for printing strings to USART
+static uint32_t device_modbus_address = 0;								// Device modbus address is self-populated by get_modbus_address()
+static volatile uint32_t adc_value = 0;									// The ADC value is the average of 16 measurements
+static volatile bool adc_conversion_complete = false;					// This flag needs to be polled when an ADC conversion is started
 
 int main(void) {
 
@@ -60,6 +63,9 @@ int main(void) {
 
 		HAL_Delay(250);
 		HAL_ADC_Start_IT(&hadc2);
+		if (adc_conversion_complete == true) {
+			;
+		}
 
 	}
 }
@@ -291,12 +297,18 @@ static void MX_OPAMP2_Init(void)
  */
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
-	uint32_t result = 0;
-	for (int c = 0; c < 16; c++) {
+	adc_conversion_complete = false;
+	static int conv_count = 0;
+
+	if (conv_count < 16) {
 		adc_value += HAL_ADC_GetValue(hadc);
 		HAL_ADC_Start_IT(hadc);
+		conv_count++;
+	} else {
+		conv_count = 0;
+		adc_value = adc_value >> 4;
+		adc_conversion_complete = true;
 	}
-	adc_value = adc_value >> 4;
 }
 
 
