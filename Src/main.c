@@ -34,9 +34,9 @@ static void MX_OPAMP2_Init(void);
 // User functions
 uint32_t get_modbus_address();											// Function to get modbus device address from reading 5-bit dip switch
 void process_modbus_command(ModbusCommand mc);							// Process the received modbus command and respond
-float get_adc_value();
+float get_adc_value(void);												// Return the ADC value on channel 3
 void HAL_IncTick(void);													// The function is defined as weak in stm32f3xx_hal.c and is redefined in main in order to use the sys tick interrupt (ocurring each ms)
-
+float self_calibration(void);
 
 // User variables
 static uint8_t uart_buffer[64] = {0};									// Buffer used for printing strings to USART
@@ -48,6 +48,7 @@ uint32_t adc_buffer[48];												// Buffer used for ADC2 DMA interrupt
 ADC_Data adc_data;														// ADC_Data structure used for passing data between main and the ADC interrupt callback
 static volatile bool adc_conversion_done = false;
 static float adc_val = 0;
+static float adc_step_per_liter = 0;
 
 int main(void) {
 
@@ -71,7 +72,11 @@ int main(void) {
 	adc_data.vrefint_cal = *VREFINT_CAL_ADDR;
 	adc_data.vdd = 0.0;
 
-	HAL_ADC_Start_DMA(&hadc2, (uint32_t*)adc_buffer, 32);												// Start ADC															// Trigger first ADC conversion
+	if ( adc_step_per_liter = self_calibration() == -1 ) {
+		Error_Handler();
+	}
+
+// 	HAL_ADC_Start_DMA(&hadc2, (uint32_t*)adc_buffer, 32);												// Start ADC															// Trigger first ADC conversion
 
 	while (1) {
 
@@ -502,6 +507,23 @@ float get_adc_value() {
 	float adc_result = adc_data.vdd * adc_data.adc_value_channel_3 / 4095; 	// Convert raw ADC data from channel 3
 	float temp = channel4_adc * adc_data.vdd / 4095;
 	return adc_result;
+}
+
+
+/****************************************************************************************************************/
+/**
+ * The function caluclates the range and step per liter of the ADC.
+ * Preliminaries: The sensor needs to be connected and the flow to be zero
+ */
+/****************************************************************************************************************/
+float self_calibration(void)
+{
+	float t = get_adc_value();												// Get current ADC data
+	if ( (t == -1) || (t < 500) ) {											// If t == -1, an ADC timeout has occurred; if less than 500, input voltage is not correct - it should be 0.65V
+		return false;
+	}
+
+	return ( (adc_data.vdd - t) / 200 );									// Return ADC step per liter
 }
 
 /****************************************************************************************************************/
