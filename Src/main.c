@@ -1,6 +1,7 @@
 #include "main.h"
 #include <string.h>
 #include <stdbool.h>
+#include <math.h>
 #include "rs485_modbus_rtu.h"
 
 #define MEASURE	0x00010001
@@ -33,10 +34,11 @@ static void MX_OPAMP2_Init(void);
 
 // User functions
 uint32_t get_modbus_address();											// Function to get modbus device address from reading 5-bit dip switch
-void process_modbus_command(ModbusCommand mc);							// Process the received modbus command and respond
+void process_modbus_command(ModbusCommand mc, float step_per_liter, float zero_value);		// Process the received modbus command and respond
 float get_adc_value(void);												// Return the ADC value on channel 3
+bool self_calibration(float *spl, float *zo);							// Perform sensor calibration. See function description below
+int16_t get_flow(float step_per_liter, float zero_value);
 void HAL_IncTick(void);													// The function is defined as weak in stm32f3xx_hal.c and is redefined in main in order to use the sys tick interrupt (ocurring each ms)
-float self_calibration(void);
 
 // User variables
 static uint8_t uart_buffer[64] = {0};									// Buffer used for printing strings to USART
@@ -46,9 +48,8 @@ static volatile uint32_t vrefint_value = 0;								// Internal VREFINT value; co
 static volatile bool adc_conversion_complete = false;					// This flag needs to be polled when an ADC conversion is started
 uint32_t adc_buffer[48];												// Buffer used for ADC2 DMA interrupt
 ADC_Data adc_data;														// ADC_Data structure used for passing data between main and the ADC interrupt callback
-static volatile bool adc_conversion_done = false;
-static float adc_val = 0;
 static float adc_step_per_liter = 0;
+static float zero_offset = 0;
 
 int main(void) {
 
@@ -61,10 +62,9 @@ int main(void) {
 	MX_GPIO_Init();
 	MX_USART2_UART_Init();
 	HAL_OPAMP_Start(&hopamp2);
-
 	device_modbus_address = get_modbus_address();
 	USART1_RS485_Init(device_modbus_address);
-	//MX_IWDG_Init();
+	MX_IWDG_Init();
 
 	adc_data.adc_conversion_complete = false;
 	adc_data.adc_value_channel_3 = 0;
@@ -72,24 +72,20 @@ int main(void) {
 	adc_data.vrefint_cal = *VREFINT_CAL_ADDR;
 	adc_data.vdd = 0.0;
 
-	if ( adc_step_per_liter = self_calibration() == -1 ) {
-		Error_Handler();
+	if ( self_calibration(&adc_step_per_liter, &zero_offset) == false ) {
+		// @TODO: Take action if calibration fails
 	}
-
-// 	HAL_ADC_Start_DMA(&hadc2, (uint32_t*)adc_buffer, 32);												// Start ADC															// Trigger first ADC conversion
 
 	while (1) {
 
-//		if (modbus_command_available()) {																// Check if a command has been received
-//			ModbusCommand mc = get_modbus_command();													// Read modbus command
-//			if (mc.address ==  device_modbus_address & (modbus_command_check_crc(mc) == 0)) {			// Check command validity
-//				// process_modbus_command(mc);																// Parse command and take action
-//			}
-//		}
+		if (modbus_command_available()) {																// Check if a command has been received
+			ModbusCommand mc = get_modbus_command();													// Read modbus command
+			if (mc.address ==  device_modbus_address & (modbus_command_check_crc(mc) == 0)) {			// Check command validity
+				process_modbus_command(mc, adc_step_per_liter, zero_offset);							// Parse command and take action
+			}
+		}
 
-
-		HAL_Delay(250);
-		adc_val = get_adc_value();
+		HAL_IWDG_Refresh(&hiwdg);
 
 	}
 }
@@ -411,32 +407,28 @@ uint32_t get_modbus_address() {
  * @param mc The command for processing
  */
 /****************************************************************************************************************/
-void process_modbus_command(ModbusCommand mc) {
+void process_modbus_command(ModbusCommand mc, float step_per_liter, float zero_value) {
 
-//	// Get modbus start register and number of registers from data field
-//	uint32_t data_field = (uint32_t)(mc.data[0] << 24UL) | (uint32_t)(mc.data[1] << 16UL) | (uint32_t)(mc.data[2] << 8UL) | (uint32_t)(mc.data[3]);
-//	uint8_t sfm_err = 0;
-//	uint8_t response[9] = {};												// Response array
-//	response[0] = mc.address;												// Copy device address
-//	response[1] = mc.function_code;											// Copy function code
-//
-//	if (mc.function_code == 0x04) {											// Function code 0x04 - Read Holding registers
-//		// Address 0x01; 1 register
-//		if (data_field == 0x00010001) {
-//			uint16_t temp = 0xffff;
-//
-//			response[2] = 2;												// 2 bytes (1 register) in payload
-//			sfm_err = sfm4100_measure(FLOW, &temp);							// Get measurement
-//			response[3] = (uint8_t) (temp >> 8);							// Copy measurement in buffer
-//			response[4] = (uint8_t) (temp & 0xff);
-//			uint16_t crc = modbus_generate_crc(response, 5);				// Generate CRC
-//			response[5] = (uint8_t) (crc & 0xff);							// Copy CRC in buffer
-//			response[6] = (uint8_t) (crc >> 8);
-//			USART1_putstring(response, 7);									// Send measurement to USART1 (rs485)
-//
-//			if (sfm_err) sfm4100_soft_reset();								// If an error is returned when reading sensor, issue soft reset
-//		}
-//
+	// Get modbus start register and number of registers from data field
+	uint32_t data_field = (uint32_t)(mc.data[0] << 24UL) | (uint32_t)(mc.data[1] << 16UL) | (uint32_t)(mc.data[2] << 8UL) | (uint32_t)(mc.data[3]);
+	uint8_t response[9] = {};												// Response array
+	response[0] = mc.address;												// Copy device address
+	response[1] = mc.function_code;											// Copy function code
+
+	if (mc.function_code == 0x04) {											// Function code 0x04 - Read Holding registers
+		// Address 0x01; 1 register of 16 bits (int16_t)
+		if (data_field == 0x00010001) {										// Starting address 0001, quantity of input registers: 0001
+			int16_t temp = 0xffff;
+			response[2] = 2;												// 2 bytes (1 register) in payload
+			temp = get_flow(step_per_liter, zero_value);					// Get measurement
+			response[3] = (uint8_t) (temp >> 8);							// Copy measurement in buffer
+			response[4] = (uint8_t) (temp & 0xff);
+			uint16_t crc = modbus_generate_crc(response, 5);				// Generate CRC
+			response[5] = (uint8_t) (crc & 0xff);							// Copy CRC in buffer
+			response[6] = (uint8_t) (crc >> 8);
+			USART1_putstring(response, 7);									// Send measurement to USART1 (rs485)
+		}
+
 //		// SFM4100 Serial number; 0x02; 2 registers
 //		if (data_field == 0x00020002) {
 //			uint32_t sfm4100_serial_number = 0;
@@ -477,10 +469,17 @@ void process_modbus_command(ModbusCommand mc) {
 //			response[6] = (uint8_t) (crc >> 8);
 //			USART1_putstring(response, 7);									// Send response to USART1 (rs485)
 //		}
-//	}
+	}
 
 }
 
+/****************************************************************************************************************/
+/**
+ * The function triggers an ADC conversion, waits 1ms and polls the data ready flag of the ADC_Data structure.
+ * The ADC scans channel 3 (connected to OPAMP2 output) and Vrefint, which is done to get the Vdd.
+ * After that the function calculates the true value on ADC channel 3 using Vdd and returns it
+ */
+/****************************************************************************************************************/
 float get_adc_value() {
 	HAL_ADC_Start_DMA(&hadc2, (uint32_t*)adc_buffer, 48);					// Start a new conversion
 	HAL_Delay(1);															// Wait a predetermined amount of time
@@ -489,10 +488,10 @@ float get_adc_value() {
 	}
 
 	adc_data.adc_conversion_complete = false;								// Reset flag
-	adc_data.adc_value_channel_3 = 0;										// Clear ADC data
-	adc_data.adc_vrefint_data = 0;
+	adc_data.adc_value_channel_3 = 0;										// Clear ADC channel 3 data
+	adc_data.adc_vrefint_data = 0;											// Clear ADC Vrefint data
 	uint32_t channel4_adc = 0;
-	uint32_t *tempbuf = adc_buffer;											// A pointer to the ADC buffer
+	uint32_t *tempbuf = adc_buffer;											// Get a pointer to the ADC buffer
 
 	for (int x = 0; x < 16; x++) {											// Iterate over the ADC buffer and copy the data
 		adc_data.adc_value_channel_3 += *tempbuf++;
@@ -516,14 +515,30 @@ float get_adc_value() {
  * Preliminaries: The sensor needs to be connected and the flow to be zero
  */
 /****************************************************************************************************************/
-float self_calibration(void)
+bool self_calibration(float *spl, float *zo)
 {
-	float t = get_adc_value();												// Get current ADC data
-	if ( (t == -1) || (t < 500) ) {											// If t == -1, an ADC timeout has occurred; if less than 500, input voltage is not correct - it should be 0.65V
+	*zo = get_adc_value();												// Get current ADC data
+	if ( (*zo == -1) || (*zo < 0.5) ) {											// If t == -1, an ADC timeout has occurred; if less than 500, input voltage is not correct - it should be 0.65V
 		return false;
 	}
 
-	return ( (adc_data.vdd - t) / 200 );									// Return ADC step per liter
+	*spl = ((adc_data.vdd - *zo) / 200);
+	return true;
+}
+
+
+int16_t get_flow(float step_per_liter, float zero_value) {
+	float flow = -1;
+	// Get current ADC reading
+	float adc_reading = get_adc_value();
+
+	if (adc_reading == -1) {
+		return -1;
+	}
+
+	flow = (adc_reading - zero_value) / step_per_liter;
+	flow = round(flow);
+	return (int16_t) flow;
 }
 
 /****************************************************************************************************************/
